@@ -1,0 +1,72 @@
+name: Sync upstream
+
+on:
+  schedule:
+    # 每天北京时间 04:00 同步（UTC 20:00）
+    - cron: '0 20 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      UPSTREAM_REPO: alireza0/s-ui-frontend
+    steps:
+      - name: Configure default git branch
+        run: git config --global init.defaultBranch main
+
+      - name: Checkout fork
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch upstream main --tags
+
+      - name: Sync main from upstream and preserve fork workflows
+        run: |
+          set -euo pipefail
+
+          tmp_workflows="$(mktemp -d)"
+          if [ -d .github/workflows ]; then
+            cp -a .github/workflows/. "$tmp_workflows/"
+          fi
+
+          git checkout main
+          git reset --hard upstream/main
+
+          rm -rf .github/workflows
+          mkdir -p .github/workflows
+          cp -a "$tmp_workflows/." .github/workflows/
+          git add .github/workflows
+
+          if git diff --cached --quiet; then
+            echo "Fork main is already in sync with upstream."
+          else
+            git commit -m "Sync upstream and keep fork workflow"
+            git push --force-with-lease origin main
+          fi
+
+      - name: Sync latest upstream tag
+        run: |
+          set -euo pipefail
+          latest_tag="$(git tag --sort=-creatordate | head -n 1)"
+          echo "Latest upstream tag: $latest_tag"
+          if [ -n "$latest_tag" ]; then
+            git push origin "refs/tags/${latest_tag}:refs/tags/${latest_tag}"
+          fi
